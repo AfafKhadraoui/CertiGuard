@@ -1,18 +1,6 @@
 import platform
 import sys
 import time
-from pathlib import Path
-
-# Add src to sys.path to allow direct execution
-src_path = str(Path(__file__).parent.parent / "src")
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-try:
-    import pytest
-except ImportError:
-    pytest = None
-
 from certiguard.layers.antidebug import debugger_detected
 
 def test_debugger_detected_normal_run():
@@ -57,12 +45,3 @@ def test_debugger_detected_timing():
     finally:
         # Restore
         ad.time.perf_counter_ns = original_perf
-
-if __name__ == "__main__":
-    if pytest:
-        sys.exit(pytest.main([__file__]))
-    else:
-        print("Running tests without pytest...")
-        test_debugger_detected_normal_run()
-        test_debugger_detected_timing()
-        print("All tests passed!")
