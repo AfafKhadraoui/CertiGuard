@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 
 from certiguard.build_noise import generate_noise_header
-from certiguard.client import CertiGuardClient
+from certiguard.license_client import CertiGuardClient
 from certiguard.config import SecurityPolicy
-from certiguard.issuer import issue_license
+from certiguard.ca import issue_license
 from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest

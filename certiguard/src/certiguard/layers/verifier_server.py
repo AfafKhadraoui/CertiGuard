@@ -19,12 +19,10 @@ from certiguard.layers.integrity import file_sha256
 from certiguard.layers.storage import read_json, secure_write_json
 
 
+import base64
+
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def load_license(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def verify_license_and_respond(
@@ -38,22 +36,33 @@ def verify_license_and_respond(
     grace_state_path: Path | None = None,
     exe_hash_grace_hours: int = 72,
 ) -> dict[str, Any]:
-    lic = load_license(license_path)
-    signature = lic["signature"]
-    payload = {k: v for k, v in lic.items() if k != "signature"}
-    pub = load_public_key(public_key_path)
-    if not verify_payload(payload, signature, pub):
-        raise InvalidSignature("Invalid license signature")
+    raw_b64 = license_path.read_text(encoding="ascii")
+    raw_bytes = base64.b64decode(raw_b64)
+
+    # In production, replace PUBLIC_KEY_HEX with hardcoded hex string
+    # For dynamic tests, we fall back to public_key_path
+    PUBLIC_KEY_HEX = os.environ.get("CERTIGUARD_PUBLIC_KEY_HEX", None)
+    if PUBLIC_KEY_HEX:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(PUBLIC_KEY_HEX))
+    else:
+        pub = load_public_key(public_key_path)
+
+    payload_bytes = verify_payload(raw_bytes, pub)
+    payload = json.loads(payload_bytes.decode("utf-8"))
 
     if datetime.fromisoformat(payload["valid_until"].replace("Z", "+00:00")) < _now():
         raise PermissionError("License expired")
+
+    if datetime.fromisoformat(payload["issued_at"].replace("Z", "+00:00")) > _now():
+        raise PermissionError("License from the future")
 
     tripwires = payload.get("tripwires", {})
     if tripwires.get("premium_unlock") or tripwires.get("admin_override"):
         raise PermissionError("Tripwire field mutated")
 
     hw_fp = hardware_fingerprint()
-    if payload["hardware_fingerprint"] != hw_fp:
+    if not hmac.compare_digest(payload["hardware_fingerprint"], hw_fp):
         raise PermissionError("Hardware fingerprint mismatch")
 
     boot_count = read_counter(counter_path, hw_fp)
@@ -102,8 +111,10 @@ def verify_challenge_response(
     dna_path: Path,
     counter_path: Path,
 ) -> bool:
-    lic = load_license(license_path)
-    payload = {k: v for k, v in lic.items() if k != "signature"}
+    raw_b64 = license_path.read_text(encoding="ascii")
+    raw_bytes = base64.b64decode(raw_b64)
+    payload_bytes = raw_bytes[64:]
+    payload = json.loads(payload_bytes.decode("utf-8"))
     hw_fp = hardware_fingerprint()
     boot_count = read_counter(counter_path, hw_fp)
     session_key = derive_session_key(dna_path, hw_fp, boot_count)
