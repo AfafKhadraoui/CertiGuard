@@ -48,6 +48,11 @@ def sign_payload(payload: dict[str, Any], private_key: Ed25519PrivateKey) -> byt
     return sig + payload_bytes
 
 
+def sign_payload_bytes(payload_bytes: bytes, private_key: Ed25519PrivateKey) -> bytes:
+    sig = private_key.sign(payload_bytes)
+    return sig + payload_bytes
+
+
 def verify_payload(signed_bytes: bytes, public_key: Ed25519PublicKey) -> bytes:
     if len(signed_bytes) < 64:
         raise InvalidSignature("Payload too short to contain signature")
