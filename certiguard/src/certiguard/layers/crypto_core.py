@@ -7,6 +7,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.exceptions import InvalidSignature
 
 
 def canonical_payload(payload: dict[str, Any]) -> bytes:
@@ -41,15 +42,17 @@ def load_public_key(path: Path) -> Ed25519PublicKey:
     return serialization.load_pem_public_key(path.read_bytes())
 
 
-def sign_payload(payload: dict[str, Any], private_key: Ed25519PrivateKey) -> str:
-    sig = private_key.sign(canonical_payload(payload))
-    return base64.b64encode(sig).decode("ascii")
+def sign_payload(payload: dict[str, Any], private_key: Ed25519PrivateKey) -> bytes:
+    payload_bytes = canonical_payload(payload)
+    sig = private_key.sign(payload_bytes)
+    return sig + payload_bytes
 
 
-def verify_payload(payload: dict[str, Any], signature_b64: str, public_key: Ed25519PublicKey) -> bool:
-    try:
-        public_key.verify(base64.b64decode(signature_b64), canonical_payload(payload))
-        return True
-    except Exception:
-        return False
+def verify_payload(signed_bytes: bytes, public_key: Ed25519PublicKey) -> bytes:
+    if len(signed_bytes) < 64:
+        raise InvalidSignature("Payload too short to contain signature")
+    sig = signed_bytes[:64]
+    payload_bytes = signed_bytes[64:]
+    public_key.verify(sig, payload_bytes)
+    return payload_bytes
 

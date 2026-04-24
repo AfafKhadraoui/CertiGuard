@@ -12,7 +12,7 @@ from certiguard.layers.counter import increment_counter, init_counter
 from certiguard.layers.dna import init_installation_dna, load_installation_dna
 from certiguard.layers.hardware import hardware_fingerprint
 from certiguard.layers.tpm import tpm_anchor, tpm_info
-from certiguard.layers.verifier import (
+from certiguard.layers.verifier_server import (
     random_challenge,
     verify_challenge_response,
     verify_license_and_respond,
@@ -100,7 +100,10 @@ class CertiGuardClient:
             return VerificationResult(False, "L5_DMS", "Verifier heartbeat invalid", {})
 
         # Optional premium tier check: if license includes TPM anchor, enforce it.
-        lic = json.loads(license_path.read_text(encoding="utf-8"))
+        import base64
+        raw_bytes = base64.b64decode(license_path.read_text(encoding="ascii"))
+        payload_bytes = raw_bytes[64:]
+        lic = json.loads(payload_bytes.decode("utf-8"))
         lic_tpm = lic.get("tpm", {})
         expected_anchor = lic_tpm.get("anchor")
         local_anchor = tpm_anchor()
