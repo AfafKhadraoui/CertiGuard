@@ -12,6 +12,7 @@ from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest
 from certiguard.layers.protector import protect_executable
+from certiguard.dashboard import review_audit_logs
 from certiguard.watchdog_supervisor import supervise_heartbeat_or_fail
 
 
@@ -68,6 +69,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
         public_key_path=Path(args.public_key)
     )
     exit(exit_code)
+
+
+def _cmd_dashboard(args: argparse.Namespace) -> None:
+    review_audit_logs(audit_log_path=args.audit_log, port=args.port)
 
 
 def _cmd_verify(args: argparse.Namespace) -> None:
@@ -172,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--public-key", required=True)
     run.add_argument("--state-dir", required=True)
     run.set_defaults(func=_cmd_run)
+
+    dashboard = sub.add_parser("dashboard", help="Launch the vendor security dashboard")
+    dashboard.add_argument("--audit-log", required=True, help="Path to audit.log file")
+    dashboard.add_argument("--port", type=int, default=8080, help="Port to serve on")
+    dashboard.set_defaults(func=_cmd_dashboard)
 
     verify = sub.add_parser("verify", help="Run full verification")
     verify.add_argument("--state-dir", required=True)
