@@ -93,8 +93,8 @@ def _cmd_renewal(args: argparse.Namespace) -> None:
 
 
 def _cmd_generate_noise(args: argparse.Namespace) -> None:
-    out = generate_noise_header(seed=args.seed, out_path=Path(args.out), lines=args.lines)
-    print(f"Noise header generated: {out}")
+    out = generate_noise_header(seed=args.seed, out_path=Path(args.out), mode=args.mode, lang=args.lang, lines=args.lines)
+    print(f"Noise header generated: {out} [Mode: {args.mode}, Lang: {args.lang}]")
 
 
 def _cmd_create_manifest(args: argparse.Namespace) -> None:
@@ -198,9 +198,11 @@ def build_parser() -> argparse.ArgumentParser:
     renewal.add_argument("--customer-private-key", help="Optional customer key to sign renewal export")
     renewal.set_defaults(func=_cmd_renewal)
 
-    noise = sub.add_parser("generate-noise", help="Generate per-build dynamic noise C header")
+    noise = sub.add_parser("generate-noise", help="Generate per-build dynamic noise header/class")
     noise.add_argument("--seed", type=int, required=True)
     noise.add_argument("--out", required=True)
+    noise.add_argument("--mode", choices=["rule", "smart", "polymorphic"], default="rule")
+    noise.add_argument("--lang", choices=["c", "csharp"], default="c")
     noise.add_argument("--lines", type=int, default=24)
     noise.set_defaults(func=_cmd_generate_noise)
 

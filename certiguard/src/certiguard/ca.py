@@ -67,7 +67,6 @@ def issue_license(
             "binary_secret_b64": binary_secret_b64,
             "encrypted_key_b64": base64.b64encode(encrypted_key).decode("ascii")
         }
-
     signed_bytes = sign_payload(payload, load_private_key(private_key_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(base64.b64encode(signed_bytes).decode("ascii"), encoding="ascii")

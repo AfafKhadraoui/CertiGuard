@@ -23,7 +23,14 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
     # Change to the dist directory so SimpleHTTPRequestHandler serves from there
     os.chdir(ui_dist_dir)
     
-    Handler = http.server.SimpleHTTPRequestHandler
+    class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+        def end_headers(self):
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            super().end_headers()
+            
+    Handler = NoCacheHandler
     
     with socketserver.TCPServer(("", port), Handler) as httpd:
         print(f"Serving dashboard at http://localhost:{port}")
@@ -32,7 +39,7 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
         # Open the browser in a separate thread after a short delay
         def open_browser():
             time.sleep(1)
-            webbrowser.open(f"http://localhost:{port}")
+            webbrowser.open(f"http://localhost:{port}?nocache={time.time()}")
             
         threading.Thread(target=open_browser, daemon=True).start()
         

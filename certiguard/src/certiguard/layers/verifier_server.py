@@ -39,6 +39,20 @@ def verify_license_and_respond(
     raw_b64 = license_path.read_text(encoding="ascii")
     raw_bytes = base64.b64decode(raw_b64)
 
+    # --- LAYER 7: HONEYPOT TRIPWIRE (Second Line of Defense) ---
+    # We parse the JSON directly from the raw bytes (skipping the 64-byte signature prefix)
+    # This ensures that even if an attacker manages to bypass or forge the signature check below,
+    # the honeypot activation will be caught immediately.
+    try:
+        raw_payload_bytes = raw_bytes[64:]
+        raw_payload = json.loads(raw_payload_bytes.decode("utf-8"))
+        if raw_payload.get("PREMIUM_UNLOCK") or raw_payload.get("ADMIN_OVERRIDE") or \
+           raw_payload.get("DEBUG_MODE") or raw_payload.get("FEATURE_FLAG_XYZ"):
+            raise PermissionError("L7_HONEYPOT: Tampering detected via honeypot activation")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    # -----------------------------------------------------------
+
     # In production, replace PUBLIC_KEY_HEX with hardcoded hex string
     # For dynamic tests, we fall back to public_key_path
     PUBLIC_KEY_HEX = os.environ.get("CERTIGUARD_PUBLIC_KEY_HEX", None)
@@ -56,10 +70,6 @@ def verify_license_and_respond(
 
     if datetime.fromisoformat(payload["issued_at"].replace("Z", "+00:00")) > _now():
         raise PermissionError("License from the future")
-
-    tripwires = payload.get("tripwires", {})
-    if tripwires.get("premium_unlock") or tripwires.get("admin_override"):
-        raise PermissionError("Tripwire field mutated")
 
     hw_fp = hardware_fingerprint()
     if not hmac.compare_digest(payload["hardware_fingerprint"], hw_fp):
