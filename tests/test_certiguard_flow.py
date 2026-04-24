@@ -5,8 +5,8 @@ import hashlib
 import hmac
 from pathlib import Path
 
-from certiguard.client import CertiGuardClient
-from certiguard.issuer import issue_license
+from certiguard.license_client import CertiGuardClient
+from certiguard.ca import issue_license
 from certiguard.layers.crypto_core import generate_keypair
 
 
@@ -65,9 +65,16 @@ def test_tampered_license_rejected(tmp_path: Path) -> None:
         valid_days=30,
         exe_hash="abc123",
     )
-    tampered = json.loads(license_path.read_text(encoding="utf-8"))
+    import base64
+    from certiguard.layers.crypto_core import canonical_payload
+    raw_b64 = license_path.read_text(encoding="ascii")
+    raw_bytes = base64.b64decode(raw_b64)
+    sig = raw_bytes[:64]
+    tampered = json.loads(raw_bytes[64:].decode("utf-8"))
     tampered["parameters"]["max_users"] = 999
-    license_path.write_text(json.dumps(tampered), encoding="utf-8")
+    new_payload = canonical_payload(tampered)
+    new_signed = sig + new_payload
+    license_path.write_text(base64.b64encode(new_signed).decode("ascii"), encoding="ascii")
     result = client.verify_runtime(
         license_path=license_path,
         public_key_path=public_key,

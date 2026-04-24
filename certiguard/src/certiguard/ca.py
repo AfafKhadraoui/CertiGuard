@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -35,9 +36,8 @@ def issue_license(
         "watermark": hashlib.sha256(f"{issued_to}|{req['hardware_fingerprint']}".encode("utf-8")).hexdigest()[:16],
         "tripwires": {"premium_unlock": False, "admin_override": False},
     }
-    sig = sign_payload(payload, load_private_key(private_key_path))
-    signed = {**payload, "signature": sig}
+    signed_bytes = sign_payload(payload, load_private_key(private_key_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(signed, indent=2), encoding="utf-8")
-    return signed
+    out_path.write_text(base64.b64encode(signed_bytes).decode("ascii"), encoding="ascii")
+    return payload
 

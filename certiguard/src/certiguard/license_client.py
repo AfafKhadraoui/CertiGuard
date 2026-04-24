@@ -8,15 +8,12 @@ from certiguard.config import SecurityPolicy
 from certiguard.layers.anomaly import BehaviorDetector
 from certiguard.layers.antidebug import debugger_detected
 from certiguard.layers.audit import append_event, verify_chain
-from certiguard.layers.counter import increment_counter, init_counter
-from certiguard.layers.dna import init_installation_dna, load_installation_dna
+from certiguard.layers.counter import ensure_boot_counter, init_counter
+from certiguard.layers.dna import capture_runtime_snapshot, init_installation_dna, load_installation_dna
 from certiguard.layers.hardware import hardware_fingerprint
 from certiguard.layers.tpm import tpm_anchor, tpm_info
-from certiguard.layers.verifier import (
-    random_challenge,
-    verify_challenge_response,
-    verify_license_and_respond,
-)
+from certiguard.layers.verifier_ipc import verify_via_separate_process
+from certiguard.layers.verifier_server import random_challenge, verify_challenge_response
 from certiguard.layers.watchdog import verify_heartbeat_recent, write_heartbeat
 from certiguard.layers.crypto_core import load_private_key, sign_payload
 from certiguard.layers.storage import secure_write_json
@@ -38,7 +35,8 @@ class CertiGuardClient:
         hw_fp = hardware_fingerprint()
         init_installation_dna(self.dna_path, hw_fp)
         init_counter(self.counter_path, hw_fp)
-        boot_count = increment_counter(self.counter_path, hw_fp)
+        runtime = capture_runtime_snapshot()
+        boot_count = ensure_boot_counter(self.counter_path, hw_fp, runtime["boot_id"])
         dna = load_installation_dna(self.dna_path, hw_fp)
         req = {
             "generated_at": datetime.now(UTC).isoformat(),
@@ -71,14 +69,14 @@ class CertiGuardClient:
 
         challenge = random_challenge()
         try:
-            response = verify_license_and_respond(
+            runtime = capture_runtime_snapshot()
+            ensure_boot_counter(self.counter_path, hardware_fingerprint(), runtime["boot_id"])
+            response = verify_via_separate_process(
+                state_dir=self.state_dir,
                 license_path=license_path,
                 public_key_path=public_key_path,
                 challenge_nonce=challenge,
-                dna_path=self.dna_path,
-                counter_path=self.counter_path,
                 app_binary_path=app_binary_path,
-                grace_state_path=self.grace_path,
                 exe_hash_grace_hours=policy.exe_hash_grace_hours,
             )
         except Exception as exc:
@@ -100,7 +98,10 @@ class CertiGuardClient:
             return VerificationResult(False, "L5_DMS", "Verifier heartbeat invalid", {})
 
         # Optional premium tier check: if license includes TPM anchor, enforce it.
-        lic = json.loads(license_path.read_text(encoding="utf-8"))
+        import base64
+        raw_bytes = base64.b64decode(license_path.read_text(encoding="ascii"))
+        payload_bytes = raw_bytes[64:]
+        lic = json.loads(payload_bytes.decode("utf-8"))
         lic_tpm = lic.get("tpm", {})
         expected_anchor = lic_tpm.get("anchor")
         local_anchor = tpm_anchor()
