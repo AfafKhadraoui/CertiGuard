@@ -11,6 +11,7 @@ from certiguard.ca import issue_license
 from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest
+from certiguard.layers.protector import protect_executable
 from certiguard.watchdog_supervisor import supervise_heartbeat_or_fail
 
 
@@ -41,8 +42,32 @@ def _cmd_issue(args: argparse.Namespace) -> None:
         modules=args.modules.split(","),
         valid_days=args.valid_days,
         exe_hash=exe_hash,
+        k_app_b64=args.k_app_b64,
+        binary_secret_b64=args.binary_secret_b64,
     )
     print(f"License issued: {args.out}")
+
+
+def _cmd_protect(args: argparse.Namespace) -> None:
+    metadata = protect_executable(
+        exe_path=Path(args.exe),
+        out_dir=Path(args.out_dir)
+    )
+    print(f"Binary protected in: {args.out_dir}")
+    print(f"App Hash:      {metadata['app_hash']}")
+    print(f"K_app (B64):   {metadata['k_app_b64']}")
+    print(f"Secret (B64):  {metadata['binary_secret_b64']}")
+    print("\nIMPORTANT: Pass these to 'issue-license' to link them.")
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    client = CertiGuardClient(Path(args.state_dir))
+    exit_code = client.run_protected_app(
+        package_dir=Path(args.package_dir),
+        license_path=Path(args.license),
+        public_key_path=Path(args.public_key)
+    )
+    exit(exit_code)
 
 
 def _cmd_verify(args: argparse.Namespace) -> None:
@@ -132,7 +157,21 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--valid-days", type=int, default=365)
     issue.add_argument("--app-binary")
     issue.add_argument("--exe-hash")
+    issue.add_argument("--k-app-b64", help="From 'protect' command")
+    issue.add_argument("--binary-secret-b64", help="From 'protect' command")
     issue.set_defaults(func=_cmd_issue)
+
+    protect = sub.add_parser("protect", help="Encrypt binary (ShieldWrap)")
+    protect.add_argument("--exe", required=True, help="Binary to encrypt")
+    protect.add_argument("--out-dir", required=True, help="Folder for app.enc + manifest.json")
+    protect.set_defaults(func=_cmd_protect)
+
+    run = sub.add_parser("run", help="Run encrypted binary (ShieldWrap)")
+    run.add_argument("--package-dir", required=True)
+    run.add_argument("--license", required=True)
+    run.add_argument("--public-key", required=True)
+    run.add_argument("--state-dir", required=True)
+    run.set_defaults(func=_cmd_run)
 
     verify = sub.add_parser("verify", help="Run full verification")
     verify.add_argument("--state-dir", required=True)

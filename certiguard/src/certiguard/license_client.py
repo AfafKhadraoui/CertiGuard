@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import os
+import subprocess
+import tempfile
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,7 +20,7 @@ from certiguard.layers.tpm import tpm_anchor, tpm_info
 from certiguard.layers.verifier_ipc import verify_via_separate_process
 from certiguard.layers.verifier_server import random_challenge, verify_challenge_response
 from certiguard.layers.watchdog import verify_heartbeat_recent, write_heartbeat
-from certiguard.layers.crypto_core import load_private_key, sign_payload
+from certiguard.layers.crypto_core import load_private_key, sign_payload, verify_payload, load_public_key, derive_key_hkdf, decrypt_binary
 from certiguard.layers.storage import secure_write_json
 from certiguard.models import VerificationResult
 
@@ -98,7 +103,6 @@ class CertiGuardClient:
             return VerificationResult(False, "L5_DMS", "Verifier heartbeat invalid", {})
 
         # Optional premium tier check: if license includes TPM anchor, enforce it.
-        import base64
         raw_bytes = base64.b64decode(license_path.read_text(encoding="ascii"))
         payload_bytes = raw_bytes[64:]
         lic = json.loads(payload_bytes.decode("utf-8"))
@@ -141,4 +145,92 @@ class CertiGuardClient:
         if customer_private_key_path:
             payload["customer_signature"] = sign_payload(payload, load_private_key(customer_private_key_path))
         secure_write_json(out_path, payload)
+
+    def run_protected_app(
+        self,
+        *,
+        package_dir: Path,
+        license_path: Path,
+        public_key_path: Path,
+    ) -> int:
+        """
+        Executes a protected application using the ShieldWrap cryptographic flow.
+        1. Verify license signature.
+        2. Derive decryption key (K_derived) from license + manifest.
+        3. Decrypt application key (K_app).
+        4. Decrypt application binary.
+        5. Execute in a secure temporary environment.
+        """
+        # 1. Load and verify license
+        raw_lic_bytes = base64.b64decode(license_path.read_text(encoding="ascii"))
+        public_key = load_public_key(public_key_path)
+        payload_bytes = verify_payload(raw_lic_bytes, public_key)
+        lic = json.loads(payload_bytes.decode("utf-8"))
+
+        # 2. Load manifest
+        manifest_path = package_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError("Package manifest.json missing")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        # 3. Derive K_derived (The Cryptographic Dependency)
+        shieldwrap = lic.get("shieldwrap")
+        if not shieldwrap:
+            raise ValueError("License does not contain ShieldWrap protection data")
+        
+        seed = base64.b64decode(lic["seed_b64"])
+        binary_secret = base64.b64decode(shieldwrap["binary_secret_b64"])
+        
+        # Build IKM using LOCAL hardware fingerprint + LOCAL TPM anchor (if license is bound)
+        local_hwid = hardware_fingerprint()
+        ikm_str = f"{local_hwid}|{lic['valid_until']}"
+        
+        # If the license expects a TPM anchor, we MUST provide our local one for the math to work.
+        if lic.get("tpm", {}).get("anchor"):
+            from certiguard.layers.tpm import tpm_anchor as get_tpm_anchor
+            local_tpm = get_tpm_anchor()
+            if local_tpm:
+                ikm_str += f"|{local_tpm}"
+            # If no local TPM but license is bound, ikm_str won't match CA's, so decryption will fail.
+
+        ikm = ikm_str.encode("utf-8") + binary_secret
+        k_derived = derive_key_hkdf(
+            salt=seed,
+            ikm=ikm,
+            info=b"certiguard-v3-kdf"
+        )
+
+        # 4. Decrypt K_app
+        encrypted_k_app = base64.b64decode(shieldwrap["encrypted_key_b64"])
+        try:
+            k_app = decrypt_binary(k_derived, encrypted_k_app)
+        except Exception:
+            raise ValueError("Failed to decrypt application key - license/hardware mismatch")
+
+        # 5. Decrypt Application Binary
+        enc_app_path = package_dir / "app.enc"
+        if not enc_app_path.exists():
+            raise FileNotFoundError("Encrypted application binary (app.enc) missing")
+        
+        enc_app_data = enc_app_path.read_bytes()
+        dec_app_data = decrypt_binary(k_app, enc_app_data)
+
+        # 6. Integrity check
+        actual_hash = hashlib.sha256(dec_app_data).hexdigest()
+        if actual_hash != manifest["app_hash"]:
+            raise ValueError("Application integrity check failed after decryption")
+
+        # 7. Secure Execution
+        # We write to a temp file, run it, then wipe it.
+        temp_exe = Path(tempfile.gettempdir()) / f"cg_{os.getpid()}.exe"
+        try:
+            temp_exe.write_bytes(dec_app_data)
+            print(f"[*] Launching protected application...")
+            result = subprocess.run([str(temp_exe)], check=False)
+            return result.returncode
+        finally:
+            # Secure wipe (overwrite with zeros) before deletion
+            if temp_exe.exists():
+                temp_exe.write_bytes(os.urandom(len(dec_app_data)))
+                temp_exe.unlink()
 
