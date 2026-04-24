@@ -12,7 +12,7 @@ from cryptography.exceptions import InvalidSignature
 
 from certiguard.layers.counter import read_counter
 from certiguard.layers.crypto_core import load_public_key, verify_payload
-from certiguard.layers.dna import derive_session_key, load_installation_dna
+from certiguard.layers.dna import derive_session_key, load_installation_dna, validate_and_update_timeline
 from certiguard.layers.hardware import hardware_fingerprint
 from certiguard.layers.tpm import tpm_anchor
 from certiguard.layers.integrity import file_sha256
@@ -74,6 +74,7 @@ def verify_license_and_respond(
         raise PermissionError("Installation UUID mismatch")
     if local_dna["first_boot_hash"] != payload["install_dna"]["first_boot_hash"]:
         raise PermissionError("Installation first-boot mismatch")
+    validate_and_update_timeline(dna_path, hw_fp, boot_count)
 
     # Optional TPM premium enforcement.
     expected_tpm_anchor = payload.get("tpm", {}).get("anchor")
