@@ -11,6 +11,7 @@ from certiguard.ca import issue_license
 from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest
+from certiguard.layers.obfuscator import obfuscate_c_file, run_confuserex
 from certiguard.watchdog_supervisor import supervise_heartbeat_or_fail
 
 
@@ -108,6 +109,27 @@ def _cmd_watchdog_supervise(args: argparse.Namespace) -> None:
     print(json.dumps({"watchdog_ok": ok}, indent=2))
 
 
+def _cmd_obfuscate_source(args: argparse.Namespace) -> None:
+    out = obfuscate_c_file(
+        input_path=Path(args.input),
+        output_path=Path(args.out),
+        seed=args.seed,
+        intensity=args.intensity,
+    )
+    print(f"Obfuscated source written: {out} [Intensity: {args.intensity}]")
+
+
+def _cmd_confuserex_protect(args: argparse.Namespace) -> None:
+    confuser_path = Path(args.confuserex) if args.confuserex else None
+    ok = run_confuserex(
+        input_assembly=Path(args.input),
+        output_dir=Path(args.out),
+        confuserex_path=confuser_path,
+    )
+    if not ok:
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="certiguard")
     sub = parser.add_subparsers(required=True)
@@ -194,6 +216,21 @@ def build_parser() -> argparse.ArgumentParser:
     watchdog.add_argument("--poll-seconds", type=int, default=5)
     watchdog.add_argument("--max-checks", type=int)
     watchdog.set_defaults(func=_cmd_watchdog_supervise)
+
+    obfuscate = sub.add_parser("obfuscate-source", help="Apply Agile.NET-style obfuscation to a C source file")
+    obfuscate.add_argument("--input", required=True, help="Input .c file")
+    obfuscate.add_argument("--out", required=True, help="Output obfuscated .c file")
+    obfuscate.add_argument("--seed", type=int, default=0, help="Random seed")
+    obfuscate.add_argument("--intensity", type=int, default=3, choices=[1,2,3,4,5],
+                           help="Obfuscation intensity 1-5 (default: 3)")
+    obfuscate.set_defaults(func=_cmd_obfuscate_source)
+
+    confuserex = sub.add_parser("confuserex-protect", help="Apply ConfuserEx protection to a .NET assembly")
+    confuserex.add_argument("--input", required=True, help="Path to .exe or .dll")
+    confuserex.add_argument("--out", required=True, help="Output directory for protected assembly")
+    confuserex.add_argument("--confuserex", help="Path to Confuser.CLI.exe (auto-detected if in PATH)")
+    confuserex.set_defaults(func=_cmd_confuserex_protect)
+
     return parser
 
 

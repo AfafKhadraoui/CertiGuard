@@ -36,14 +36,29 @@ python -m certiguard.cli generate-noise `
 
 Write-Host "         Noise header written to: examples/certiguard_noise.h" -ForegroundColor Green
 
-# ── Step 2: Compile demo application ──────────────────────────────────────
+# ── Step 1b: Obfuscate the C source (Agile.NET-style) ─────────────────────
 Write-Host ""
-Write-Host "[Step 2] Compiling demo_app.c with GCC..." -ForegroundColor Yellow
+Write-Host "[Step 1b] Applying source-level obfuscation to demo_app.c..." -ForegroundColor Yellow
+python -m certiguard.cli obfuscate-source `
+    --input examples\demo_app.c `
+    --out examples\demo_app_obfuscated.c `
+    --seed $Seed `
+    --intensity 3
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[WARN] Obfuscation step failed, using original source." -ForegroundColor Yellow
+    Copy-Item examples\demo_app.c examples\demo_app_obfuscated.c
+}
+Write-Host "         Obfuscated source written to: examples/demo_app_obfuscated.c" -ForegroundColor Green
+
+# ── Step 2: Compile obfuscated application ────────────────────────────────
+Write-Host ""
+Write-Host "[Step 2] Compiling demo_app_obfuscated.c with GCC..." -ForegroundColor Yellow
 gcc `
     -O2 `
     -I examples `
     -o examples\demo_app.exe `
-    examples\demo_app.c `
+    examples\demo_app_obfuscated.c `
     -lm
 
 if ($LASTEXITCODE -ne 0) {
