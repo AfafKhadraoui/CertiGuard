@@ -8,11 +8,17 @@ Now includes Agile.NET-style String Encryption.
 import random
 import re
 
+from certiguard.layers.honeypot import generate_honeypot_bait
+
 def obfuscate_c_file(source: str, seed: int, intensity: int = 3) -> str:
     """
-    Applies multiple layers of C source obfuscation.
+    Applies multiple layers of C source obfuscation including Honeypots.
     """
     rng = random.Random(seed)
+    
+    # Inject Honeypot Bait
+    bait_code = generate_honeypot_bait(seed)
+    source = bait_code + source
 
     # --- STRING ENCRYPTION HELPER ---
     def encrypt_string_literal(match):

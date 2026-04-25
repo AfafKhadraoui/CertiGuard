@@ -9,104 +9,99 @@ the generated C-Interpreter can understand.
 import random
 from pathlib import Path
 
-# The 'Universal' Opcodes
-OP_LOAD  = 0
-OP_XOR   = 1
-OP_ADD   = 2
-OP_CMP   = 3
-OP_JMP   = 4
-OP_EXIT  = 5
-OP_NOISE = 6
-
 def generate_vm_layer(out_header: Path, seed: int = 42):
     rng = random.Random(seed)
     
     # 1. Generate a RANDOM mapping for this specific build
-    # In this build, 0xAF might mean 'XOR', in the next it might mean 'JMP'
     all_bytes = list(range(0, 256))
     rng.shuffle(all_bytes)
     
     mapping = {
         "LOAD":  all_bytes[0],
         "XOR":   all_bytes[1],
-        "ADD":   all_bytes[2],
-        "CMP":   all_bytes[3],
-        "JMP":   all_bytes[4],
-        "EXIT":  all_bytes[5],
-        "NOISE": all_bytes[6:15] # Multiple bytes for noise
+        "CMP":   all_bytes[2],
+        "EXIT":  all_bytes[3],
+        "NOISE": all_bytes[4:15] 
     }
 
-    # 2. Create the 'Secret Bytecode' for a license check
-    # Let's say our logic is: (KeyChar XOR 0x1F) == (0x61 XOR 0x1F)
-    # 0x61 is 'a' (the first char of our valid key)
+    # 2. Create the 'Secret Bytecode' logic
     xor_key = 0x1F
     target_val = ord('a') ^ xor_key 
-    
-    bytecode = [
-        mapping["XOR"],  xor_key,       # XOR input with our secret key
-        mapping["CMP"],  target_val,    # Compare with pre-computed target
-        mapping["EXIT"]                 # Return result
-    ]
     
     # 3. Assemble instructions (keeping opcode + operand pairs together)
     instructions = [
         [mapping["XOR"], xor_key],
         [mapping["CMP"], target_val],
-        [mapping["EXIT"]]
+        [mapping["EXIT"], 0x00] # Exit also has a dummy operand for alignment
     ]
     
     # 4. Inject RANDOM NOISE between instructions
     final_bytecode = []
     for inst in instructions:
-        # Occasionally insert noise BEFORE an instruction
         if rng.random() > 0.5:
             final_bytecode.append(rng.choice(mapping["NOISE"]))
             final_bytecode.append(rng.randint(0, 255))
-        
         final_bytecode.extend(inst)
 
-    # 4. Generate the C Header
+    # 5. Encrypt the final bytecode
+    build_key = rng.randint(1000, 999999)
+    def encrypt_bytecode(data, key):
+        state = key
+        res = []
+        for b in data:
+            res.append(b ^ (state & 0xFF))
+            state = (state * 31 + 17)
+        return res
+    
+    encrypted_bytecode = encrypt_bytecode(final_bytecode, build_key)
+
+    # 6. Generate the C Header with Obfuscated Logic
+    xor_mask = rng.randint(0x10, 0xFF)
+    add_mask = rng.randint(0x01, 0x64)
+    hex_bytes = ", ".join(hex(x) for x in encrypted_bytecode)
+    
     c_code = f"""
 #ifndef CERTIGUARD_VM_H
 #define CERTIGUARD_VM_H
 
 #include <stdio.h>
+#include <stdint.h>
 
-/* CertiGuard Dynamic VM ISA - Build Seed: {seed} */
+/* [MUTANT VM] Every build uses a different internal math logic */
 #define VM_OP_LOAD  {mapping['LOAD']}
 #define VM_OP_XOR   {mapping['XOR']}
-#define VM_OP_ADD   {mapping['ADD']}
 #define VM_OP_CMP   {mapping['CMP']}
-#define VM_OP_JMP   {mapping['JMP']}
 #define VM_OP_EXIT  {mapping['EXIT']}
+#define VM_DECRYPT_KEY {build_key}
+#define VM_OBFUSC_XOR {xor_mask}
+#define VM_OBFUSC_ADD {add_mask}
 
-static const unsigned char cg_bytecode[] = {{ {', '.join(hex(x) for x in final_bytecode)} }};
+static const uint8_t cg_bytecode[] = {{ {hex_bytes} }};
+
+static inline uint8_t vm_decrypt_byte(uint8_t b, uint32_t *state) {{
+    uint8_t decrypted = b ^ (*state & 0xFF);
+    *state = (*state * 31 + 17);
+    return decrypted;
+}}
 
 static int certiguard_vm_execute(unsigned char input_val) {{
-    int reg0 = input_val;
+    // Internal state is scrambled from the start
+    int reg0 = (input_val ^ VM_OBFUSC_XOR) + VM_OBFUSC_ADD; 
+    uint32_t state = VM_DECRYPT_KEY;
     int pc = 0;
-    int result = 0;
-
-    while (pc < {len(final_bytecode)}) {{
-        unsigned char op = cg_bytecode[pc++];
+    
+    while (pc < sizeof(cg_bytecode)) {{
+        uint8_t op = vm_decrypt_byte(cg_bytecode[pc++], &state);
+        uint8_t arg = vm_decrypt_byte(cg_bytecode[pc++], &state);
         
-        /* Polmorphic Dispatcher */
         if (op == VM_OP_LOAD) {{
-            reg0 = cg_bytecode[pc++];
-        }} 
-        else if (op == VM_OP_XOR) {{
-            reg0 ^= cg_bytecode[pc++];
-        }}
-        else if (op == VM_OP_CMP) {{
-            unsigned char target = cg_bytecode[pc++];
-            result = (reg0 == target);
-        }}
-        else if (op == VM_OP_EXIT) {{
-            return result;
-        }}
-        else {{
-            /* Dynamic Noise - skip noise operand */
-            pc++; 
+            reg0 = (arg ^ VM_OBFUSC_XOR) + VM_OBFUSC_ADD;
+        }} else if (op == VM_OP_XOR) {{
+            reg0 ^= arg;
+        }} else if (op == VM_OP_CMP) {{
+            if (reg0 == ((arg ^ VM_OBFUSC_XOR) + VM_OBFUSC_ADD)) return 1;
+        }} else if (op == VM_OP_EXIT) {{
+            return 0;
         }}
     }}
     return 0;
