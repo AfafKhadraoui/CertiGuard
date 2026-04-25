@@ -91,6 +91,7 @@ def _emit_harness_result(
     message: str,
     layer: str | None = None,
     collector_url: str | None = None,
+    extra_payload: dict | None = None,
 ) -> None:
     """
     Emit a normalized harness_result event to audit.log and (best-effort) collector.
@@ -104,6 +105,8 @@ def _emit_harness_result(
         "message": str(message),
         "layer": layer_value,
     }
+    if extra_payload:
+        payload.update(extra_payload)
     log = paths["state"] / "audit.log"
     appended = False
     try:
@@ -136,6 +139,22 @@ def _emit_harness_result(
         )
     except Exception:
         pass
+
+
+def _license_context(paths: dict[str, Path], license_key: str = "lic") -> dict:
+    lic_path = paths.get(license_key)
+    if not lic_path or not lic_path.exists():
+        return {}
+    try:
+        raw = base64.b64decode(lic_path.read_text(encoding="ascii"))
+        payload = json.loads(raw[64:].decode("utf-8"))
+        return {
+            "license_id": payload.get("license_id"),
+            "hardware_fingerprint": payload.get("hardware_fingerprint"),
+            "issued_to": payload.get("issued_to"),
+        }
+    except Exception:
+        return {}
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
@@ -178,6 +197,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         message="Harness setup complete",
         layer="L1-L10",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p),
     )
 
 
@@ -206,6 +226,12 @@ def cmd_verify_ok(args: argparse.Namespace) -> None:
         message=r.message,
         layer=_infer_layer_from_code(r.code),
         collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "application"),
+        },
     )
 
 
@@ -227,6 +253,12 @@ def cmd_verify_probe(args: argparse.Namespace) -> None:
         message=r.message,
         layer="L8",
         collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "machine_probe"),
+        },
     )
 
 
@@ -248,6 +280,11 @@ def cmd_warm(args: argparse.Namespace) -> None:
             code=r.code,
             message=f"Warm iteration {i+1}/{args.times}: {r.message}",
             collector_url=args.collector or None,
+            extra_payload={
+                **_license_context(p),
+                "anomaly": bool(r.metadata.get("anomaly", False)),
+                "drift": bool(r.metadata.get("drift", False)),
+            },
         )
 
 
@@ -268,6 +305,12 @@ def cmd_stress(args: argparse.Namespace) -> None:
         message=r.message,
         layer="L8",
         collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "application"),
+        },
     )
 
 
@@ -287,6 +330,7 @@ def cmd_synthetic_audit(args: argparse.Namespace) -> None:
         message="Appended synthetic demo rows to audit chain",
         layer="L10",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p),
     )
 
 
@@ -312,6 +356,7 @@ def cmd_attack_audit(args: argparse.Namespace) -> None:
         message=f"Tampered audit entry index {idx}; next verify should fail chain",
         layer="L10",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p),
     )
 
 
@@ -343,6 +388,7 @@ def cmd_attack_honeypot(args: argparse.Namespace) -> None:
         message=r.message,
         layer="L7",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p, "evil_lic"),
     )
 
 
@@ -370,6 +416,7 @@ def cmd_attack_signature(args: argparse.Namespace) -> None:
         message=(r.message or "Signature corruption attack result"),
         layer="L1",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p),
     )
 
 
@@ -390,6 +437,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         message="Status command completed",
         layer="L10",
         collector_url=args.collector or None,
+        extra_payload=_license_context(p),
     )
 
 
