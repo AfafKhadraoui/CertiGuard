@@ -12,7 +12,7 @@ export function OverviewPage() {
         .then(setData)
         .catch(console.error);
     load();
-    const iv = setInterval(load, 10000);
+    const iv = setInterval(load, 3000);
     return () => clearInterval(iv);
   }, []);
 
@@ -20,6 +20,14 @@ export function OverviewPage() {
   const activityData = data?.activity_by_hour ?? [];
   const threatData = data?.threat_by_day ?? [];
   const liveEvents: any[] = data?.recent_events ?? [];
+  const layerStatus: any[] = data?.layer_status ?? Array.from({ length: 10 }, (_, i) => ({
+    layer: `L${i + 1}`,
+    name: "Pending",
+    state: "active",
+    state_color: "green",
+    last_code: "ACTIVE",
+    last_message: "Monitoring",
+  }));
 
   return (
     <div className="space-y-6">
@@ -95,6 +103,33 @@ export function OverviewPage() {
         </div>
       </div>
 
+      <div className="rounded border border-white/5 bg-[#0d1117] p-5">
+        <div className="mb-4">
+          <h3 className="text-sm font-medium">Layer Status (L1-L10)</h3>
+          <p className="mt-0.5 text-xs text-gray-500">Green = active, orange/red = triggered by attacks or anomalies</p>
+        </div>
+        <div className="grid grid-cols-5 gap-3">
+          {layerStatus.map((ls) => {
+            const stateClass =
+              ls.state_color === "red"
+                ? "border-red-500/30 bg-red-500/10 text-red-300"
+                : ls.state_color === "orange"
+                ? "border-orange-500/30 bg-orange-500/10 text-orange-300"
+                : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
+            return (
+              <div key={ls.layer} className={`rounded border p-3 ${stateClass}`}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold">{ls.layer}</div>
+                  <div className="text-[10px] uppercase">{ls.state}</div>
+                </div>
+                <div className="mt-1 text-xs text-white">{ls.name}</div>
+                <div className="mt-2 text-[10px] text-gray-300">{ls.last_code}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2 rounded border border-white/5 bg-[#0d1117] p-5">
           <div className="mb-5 flex items-center justify-between">
@@ -112,6 +147,9 @@ export function OverviewPage() {
               <div key={event.id} className="flex items-center justify-between rounded border border-white/5 bg-white/[0.02] p-3 transition-colors hover:bg-white/5">
                 <div className="flex-1">
                   <div className="text-sm">{event.message}</div>
+                  <div className="mt-0.5 text-xs text-gray-400">
+                    [{event.layer ?? "N/A"}] {event.code ?? event.event}
+                  </div>
                   <div className="mt-0.5 text-xs text-gray-500">{new Date(event.timestamp).toLocaleTimeString()}</div>
                 </div>
                 <span className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${

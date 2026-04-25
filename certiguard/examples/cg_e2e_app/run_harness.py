@@ -32,6 +32,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from datetime import UTC, datetime
 
 # certiguard/src on path
 _REPO = Path(__file__).resolve().parents[2]
@@ -44,6 +45,7 @@ from certiguard.config import SecurityPolicy  # noqa: E402
 from certiguard.layers.audit import append_event, verify_chain  # noqa: E402
 from certiguard.layers.crypto_core import generate_keypair  # noqa: E402
 from certiguard.license_client import CertiGuardClient  # noqa: E402
+import requests  # noqa: E402
 
 
 def _paths(root: Path) -> dict[str, Path]:
@@ -56,6 +58,103 @@ def _paths(root: Path) -> dict[str, Path]:
         "priv": root / "vendor_private.pem",
         "pub": root / "vendor_public.pem",
     }
+
+
+def _infer_layer_from_code(code: str) -> str:
+    c = (code or "").upper()
+    if c.startswith("L1") or c.startswith("L4"):
+        return "L1/L4"
+    if c.startswith("L2"):
+        return "L2"
+    if c.startswith("L3"):
+        return "L3"
+    if c.startswith("L5"):
+        return "L5/L6"
+    if c.startswith("L6"):
+        return "L8"
+    if c.startswith("L7"):
+        return "L7"
+    if c.startswith("L9"):
+        return "L9"
+    if c.startswith("L10") or "AUDIT" in c:
+        return "L10"
+    if c == "OK":
+        return "L1-L10"
+    return "N/A"
+
+
+def _emit_harness_result(
+    *,
+    args: argparse.Namespace,
+    paths: dict[str, Path],
+    code: str,
+    message: str,
+    layer: str | None = None,
+    collector_url: str | None = None,
+    extra_payload: dict | None = None,
+) -> None:
+    """
+    Emit a normalized harness_result event to audit.log and (best-effort) collector.
+    This keeps harness output visible in dashboard timelines even for non-verify commands.
+    """
+    layer_value = layer or _infer_layer_from_code(code)
+    payload = {
+        "source": "cg_e2e_app",
+        "command": str(getattr(args, "cmd", "")),
+        "code": str(code),
+        "message": str(message),
+        "layer": layer_value,
+    }
+    if extra_payload:
+        payload.update(extra_payload)
+    log = paths["state"] / "audit.log"
+    appended = False
+    try:
+        if verify_chain(log):
+            append_event(log, "harness_result", payload)
+            appended = True
+    except Exception:
+        appended = False
+
+    if not collector_url:
+        return
+    try:
+        if appended:
+            CertiGuardClient(paths["state"], collector_url=collector_url).push_audit_logs_now()
+            return
+        # If chain is broken, emit direct one-shot event to collector so UI still sees it.
+        requests.post(
+            f"{collector_url.rstrip('/')}/api/logs/ingest",
+            json={
+                "machine_id": "cg_e2e_app",
+                "logs": [
+                    {
+                        "ts": datetime.now(UTC).isoformat(),
+                        "event": "harness_result",
+                        "payload": payload,
+                    }
+                ],
+            },
+            timeout=3.0,
+        )
+    except Exception:
+        pass
+
+
+def _license_context(paths: dict[str, Path], license_key: str = "lic") -> dict:
+    lic_path = paths.get(license_key)
+    if not lic_path or not lic_path.exists():
+        return {}
+    try:
+        raw = base64.b64decode(lic_path.read_text(encoding="ascii"))
+        payload = json.loads(raw[64:].decode("utf-8"))
+        return {
+            "license_id": payload.get("license_id"),
+            "hardware_fingerprint": payload.get("hardware_fingerprint"),
+            "issued_to": payload.get("issued_to"),
+        }
+    except Exception:
+        return {}
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
@@ -91,6 +190,15 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"  license:    {p['lic']}")
     print(f"  public key: {p['pub']}")
     print(f"  audit.log:  {p['state'] / 'audit.log'}")
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code="SETUP_OK",
+        message="Harness setup complete",
+        layer="L1-L10",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p),
+    )
 
 
 def _client(args: argparse.Namespace) -> tuple[CertiGuardClient, dict[str, Path]]:
@@ -111,6 +219,20 @@ def cmd_verify_ok(args: argparse.Namespace) -> None:
         use_machine_behavior_probe=False,
     )
     print(json.dumps(r.__dict__, indent=2))
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code=r.code,
+        message=r.message,
+        layer=_infer_layer_from_code(r.code),
+        collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "application"),
+        },
+    )
 
 
 def cmd_verify_probe(args: argparse.Namespace) -> None:
@@ -124,6 +246,20 @@ def cmd_verify_probe(args: argparse.Namespace) -> None:
         use_machine_behavior_probe=True,
     )
     print(json.dumps(r.__dict__, indent=2))
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code=r.code,
+        message=r.message,
+        layer="L8",
+        collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "machine_probe"),
+        },
+    )
 
 
 def cmd_warm(args: argparse.Namespace) -> None:
@@ -138,6 +274,18 @@ def cmd_warm(args: argparse.Namespace) -> None:
             policy_path=p["state"] / "policy.json",
         )
         print(f"warm {i+1}/{args.times} ok={r.ok} code={r.code}")
+        _emit_harness_result(
+            args=args,
+            paths=p,
+            code=r.code,
+            message=f"Warm iteration {i+1}/{args.times}: {r.message}",
+            collector_url=args.collector or None,
+            extra_payload={
+                **_license_context(p),
+                "anomaly": bool(r.metadata.get("anomaly", False)),
+                "drift": bool(r.metadata.get("drift", False)),
+            },
+        )
 
 
 def cmd_stress(args: argparse.Namespace) -> None:
@@ -150,6 +298,20 @@ def cmd_stress(args: argparse.Namespace) -> None:
         policy_path=p["state"] / "policy.json",
     )
     print(json.dumps(r.__dict__, indent=2))
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code=r.code,
+        message=r.message,
+        layer="L8",
+        collector_url=args.collector or None,
+        extra_payload={
+            **_license_context(p),
+            "anomaly": bool(r.metadata.get("anomaly", False)),
+            "drift": bool(r.metadata.get("drift", False)),
+            "feature_source": r.metadata.get("feature_source", "application"),
+        },
+    )
 
 
 def cmd_synthetic_audit(args: argparse.Namespace) -> None:
@@ -161,6 +323,15 @@ def cmd_synthetic_audit(args: argparse.Namespace) -> None:
     append_event(log, "demo_synthetic", {"source": "cg_e2e_app", "note": "dashboard richness"})
     append_event(log, "demo_synthetic", {"source": "cg_e2e_app", "note": "second line"})
     print("[synthetic-audit] appended 2 events; refresh dashboard")
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code="SYNTHETIC_AUDIT_OK",
+        message="Appended synthetic demo rows to audit chain",
+        layer="L10",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p),
+    )
 
 
 def cmd_attack_audit(args: argparse.Namespace) -> None:
@@ -178,6 +349,15 @@ def cmd_attack_audit(args: argparse.Namespace) -> None:
     lines[idx] = json.dumps(row)
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"[attack-audit] tampered line index {idx}; next verify-ok should return AUDIT_TAMPER")
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code="ATTACK_AUDIT_APPLIED",
+        message=f"Tampered audit entry index {idx}; next verify should fail chain",
+        layer="L10",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p),
+    )
 
 
 def cmd_attack_honeypot(args: argparse.Namespace) -> None:
@@ -201,6 +381,15 @@ def cmd_attack_honeypot(args: argparse.Namespace) -> None:
         policy_path=paths["state"] / "policy.json",
     )
     print(json.dumps(r.__dict__, indent=2))
+    _emit_harness_result(
+        args=args,
+        paths=paths,
+        code=r.code,
+        message=r.message,
+        layer="L7",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p, "evil_lic"),
+    )
 
 
 def cmd_attack_signature(args: argparse.Namespace) -> None:
@@ -220,6 +409,15 @@ def cmd_attack_signature(args: argparse.Namespace) -> None:
         policy_path=p["state"] / "policy.json",
     )
     print(json.dumps(r.__dict__, indent=2))
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code=r.code,
+        message=(r.message or "Signature corruption attack result"),
+        layer="L1",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p),
+    )
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -232,6 +430,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         print("audit_lines:", len(lines))
         for ln in lines[-5:]:
             print(" ", ln[:120] + ("…" if len(ln) > 120 else ""))
+    _emit_harness_result(
+        args=args,
+        paths=p,
+        code="STATUS_OK",
+        message="Status command completed",
+        layer="L10",
+        collector_url=args.collector or None,
+        extra_payload=_license_context(p),
+    )
 
 
 def cmd_dashboard_hint(args: argparse.Namespace) -> None:

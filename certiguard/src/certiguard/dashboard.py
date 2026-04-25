@@ -14,6 +14,134 @@ _MEDIUM_EVENTS = {"behavior_check", "boot_counter_regression", "heartbeat_stale"
 # Centralized revocation list (in production, this would be a database)
 REVOCATION_LIST = set()
 BLACKLISTED_HARDWARE = set()
+
+_LAYER_NAMES = {
+    "L1": "Ed25519 Signing",
+    "L2": "Hardware Binding",
+    "L3": "Installation DNA",
+    "L4": "Verifier Challenge",
+    "L5": "Anti-Debug",
+    "L6": "Dead Man's Switch",
+    "L7": "Honeypot",
+    "L8": "Behavioral AI",
+    "L9": "Watermarking",
+    "L10": "Audit Chain",
+}
+
+
+def _layer_from_code(code: str) -> str | None:
+    c = (code or "").upper()
+    if c.startswith("L1"):
+        return "L1"
+    if c.startswith("L2"):
+        return "L2"
+    if c.startswith("L3"):
+        return "L3"
+    if c.startswith("L4"):
+        return "L4"
+    if c.startswith("L5"):
+        return "L6"  # DMS/heartbeat architecture label for dashboard
+    if c.startswith("L6"):
+        return "L8"  # AI anomaly architecture label for dashboard
+    if c.startswith("L7"):
+        return "L7"
+    if c.startswith("L9"):
+        return "L9"
+    if c.startswith("L10") or "AUDIT" in c:
+        return "L10"
+    return None
+
+
+def _layer_from_event(event: str, payload: dict) -> str | None:
+    explicit = str(payload.get("layer", "")).strip().upper()
+    if explicit in _LAYER_NAMES:
+        return explicit
+    if explicit in {"L1/L4", "L1-L10", "L5/L6"}:
+        return "L1" if explicit == "L1/L4" else ("L6" if explicit == "L5/L6" else "L10")
+    ev = (event or "").lower()
+    if "honeypot" in ev:
+        return "L7"
+    if "behavior" in ev or "anomaly" in ev or "drift" in ev:
+        return "L8"
+    if "heartbeat" in ev or "dms" in ev:
+        return "L6"
+    if "debug" in ev:
+        return "L5"
+    if "tpm" in ev or "hardware" in ev:
+        return "L2"
+    if "counter" in ev or "dna" in ev or "clone" in ev:
+        return "L3"
+    if "challenge" in ev or "license_reject" in ev or "license_fail" in ev:
+        return "L4"
+    if "audit" in ev or "tamper" in ev:
+        return "L10"
+    return None
+
+
+def _view_for_entry(entry: dict, idx: int) -> dict:
+    payload = entry.get("payload", {}) if isinstance(entry.get("payload", {}), dict) else {}
+    event = str(entry.get("event", ""))
+    code = str(payload.get("code", "")).strip() or event.upper()
+    message = (
+        str(payload.get("message", "")).strip()
+        or str(payload.get("reason", "")).strip()
+        or event
+    )
+    layer = _layer_from_code(code) or _layer_from_event(event, payload)
+    return {
+        "id": idx,
+        "timestamp": entry.get("ts", ""),
+        "event": event,
+        "code": code,
+        "layer": layer or "N/A",
+        "message": message,
+        "payload": payload,
+        "hash": entry.get("entry_hash", ""),
+        "severity": _classify_severity(event),
+    }
+
+
+def _build_layer_status(logs: list[dict]) -> list[dict]:
+    status_map = {
+        layer: {
+            "layer": layer,
+            "name": _LAYER_NAMES[layer],
+            "state": "active",
+            "state_color": "green",
+            "last_code": "ACTIVE",
+            "last_message": "Monitoring",
+            "last_ts": "",
+        }
+        for layer in _LAYER_NAMES
+    }
+    for idx, entry in enumerate(logs):
+        v = _view_for_entry(entry, idx)
+        layer = v["layer"]
+        if layer not in status_map:
+            continue
+        sev = v["severity"]
+        state_color = "green"
+        state = "active"
+        if sev == "medium":
+            state_color = "orange"
+            state = "warning"
+        if sev in {"high", "critical"}:
+            state_color = "red"
+            state = "triggered"
+        # Keep strongest state seen
+        prev = status_map[layer]["state_color"]
+        rank = {"green": 0, "orange": 1, "red": 2}
+        if rank[state_color] >= rank.get(prev, 0):
+            status_map[layer].update(
+                {
+                    "state": state,
+                    "state_color": state_color,
+                    "last_code": v["code"],
+                    "last_message": v["message"][:160],
+                    "last_ts": v["timestamp"],
+                }
+            )
+    return [status_map[f"L{i}"] for i in range(1, 11)]
 def _classify_severity(event: str) -> str:
     e = event.lower().replace("-", "_")
     if e in _CRITICAL_EVENTS or any(k in e for k in ("debug", "tamper", "clone")):
@@ -48,15 +176,7 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
             for i, line in enumerate(lines):
                 try:
                     entry = json.loads(line)
-                    # Flatten for easier UI consumption
-                    logs.append({
-                        "id": i,
-                        "timestamp": entry.get("ts", ""),
-                        "event": entry.get("event", ""),
-                        "payload": entry.get("payload", {}),
-                        "hash": entry.get("entry_hash", ""),
-                        "severity": _classify_severity(entry.get("event", ""))
-                    })
+                    logs.append(_view_for_entry(entry, i))
                 except Exception:
                     continue
             return jsonify(logs[::-1]) # Return newest first
@@ -138,13 +258,7 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
                     by_day[day_label] = by_day.get(day_label, 0) + 1
                 except Exception:
                     pass
-            events_feed.append({
-                "id": len(events_feed),
-                "message": entry.get("event", ""),
-                "severity": _classify_severity(entry.get("event", "")),
-                "timestamp": ts,
-                "payload": entry.get("payload", {}),
-            })
+            events_feed.append(_view_for_entry(entry, len(events_feed)))
         total = len(logs)
         blacklisted = counts.get("critical", 0)
         suspicious = counts.get("high", 0)
@@ -168,7 +282,8 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
             },
             "activity_by_hour": [{"time": k, "activity": v} for k, v in sorted(by_hour.items())],
             "threat_by_day": [{"date": k, "count": v} for k, v in sorted(by_day.items())],
-            "recent_events": events_feed[::-1][:20],
+            "recent_events": events_feed[::-1][:30],
+            "layer_status": _build_layer_status(logs),
         })
 
     @app.route("/api/clients")
