@@ -24,7 +24,7 @@ def test_debugger_detected_timing():
     import certiguard.layers.antidebug as ad
     
     # Save original
-    original_perf = time.perf_counter_ns
+    original_perf = time.perf_counter
     
     # Mock to always return a huge gap
     class MockPerfCounter:
@@ -34,14 +34,14 @@ def test_debugger_detected_timing():
         def __call__(self):
             self.calls += 1
             if self.calls == 1:
-                return 0
-            return 100_000_000 # 100ms
+                return 0.0
+            return 10.0 # 10 seconds (HUGE gap)
             
-    ad.time.perf_counter_ns = MockPerfCounter()
+    ad.time.perf_counter = MockPerfCounter()
     
     try:
         # Should detect the "timing anomaly"
-        assert ad._timing_analysis() is True
+        assert ad.check_timing_anomaly(threshold_ms=10.0) is True
     finally:
         # Restore
-        ad.time.perf_counter_ns = original_perf
+        ad.time.perf_counter = original_perf
