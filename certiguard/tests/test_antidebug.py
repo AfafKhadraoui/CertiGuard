@@ -20,43 +20,27 @@ def test_debugger_detected_normal_run():
         assert debugger_detected() is False
 
 def test_debugger_detected_timing():
-    # If we mock perf_counter to simulate a huge delay, it should return True
+    # If we mock the time.perf_counter_ns to simulate a huge delay, it should return True
     import certiguard.layers.antidebug as ad
-
+    
     # Save original
-<<<<<<< HEAD
     original_perf = time.perf_counter
     
     # Mock to always return a huge gap
-=======
-    original_perf = ad.time.perf_counter
-
->>>>>>> 03f2970bf126c33b684d155b26e82341c18ba815
     class MockPerfCounter:
         def __init__(self):
-            self.calls = 0
-
+            self.count = 0.0
         def __call__(self):
-            self.calls += 1
-            if self.calls == 1:
-                return 0.0
-<<<<<<< HEAD
-            return 10.0 # 10 seconds (HUGE gap)
+            current = self.count
+            self.count += 5.0 # Add 5 seconds of "fake delay"
+            return current
             
     ad.time.perf_counter = MockPerfCounter()
     
     try:
         # Should detect the "timing anomaly"
-        assert ad.check_timing_anomaly(threshold_ms=10.0) is True
+        # The function uses 'threshold' in seconds
+        assert ad.check_timing_anomaly(threshold=0.1) is True
     finally:
         # Restore
-=======
-            return 0.25  # 250ms
-
-    ad.time.perf_counter = MockPerfCounter()
-
-    try:
-        assert ad.check_timing_anomaly(threshold_ms=200.0) is True
-    finally:
->>>>>>> 03f2970bf126c33b684d155b26e82341c18ba815
         ad.time.perf_counter = original_perf
