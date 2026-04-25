@@ -1,9 +1,20 @@
 from __future__ import annotations
-import os
 import json
-import requests
+import os
+import platform
 from pathlib import Path
-from typing import Any
+
+import requests
+
+
+def _default_machine_id() -> str:
+    return (
+        os.environ.get("COMPUTERNAME")
+        or os.environ.get("HOSTNAME")
+        or platform.node()
+        or "unknown"
+    )
+
 
 class SyncManager:
     """
@@ -52,12 +63,12 @@ class SyncManager:
             # Note: The /api/logs/ingest endpoint would be on a remote server 
             # or the local dashboard server.
             response = requests.post(
-                f"{self.collector_url}/api/logs/ingest", 
+                f"{self.collector_url.rstrip('/')}/api/logs/ingest",
                 json={
-                    "machine_id": os.environ.get("COMPUTERNAME", "unknown"),
-                    "logs": logs_to_send
+                    "machine_id": _default_machine_id(),
+                    "logs": logs_to_send,
                 },
-                timeout=5
+                timeout=10,
             )
             
             if response.status_code == 200:

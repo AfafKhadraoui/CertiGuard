@@ -11,6 +11,8 @@ class SecurityPolicy:
     exe_hash_grace_hours: int = 72
     baseline_learning_days: int = 30
     anomaly_enforcement_after_learning: bool = True
+    # When True, L6 uses ``behavior_probe`` (CPU/RAM/process/GPU hints) instead of caller-supplied floats.
+    use_machine_behavior_probe: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> "SecurityPolicy":

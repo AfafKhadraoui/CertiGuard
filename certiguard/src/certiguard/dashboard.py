@@ -9,16 +9,16 @@ from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 
 _CRITICAL_EVENTS = {"debug_detected", "audit_tamper", "challenge_fail"}
-_HIGH_EVENTS = {"license_reject", "license_fail", "tpm_mismatch", "behavior_anomaly"}
-_MEDIUM_EVENTS = {"behavior_check", "boot_counter_regression"}
+_HIGH_EVENTS = {"license_reject", "license_fail", "tpm_mismatch", "behavior_anomaly", "tpm_policy_fail"}
+_MEDIUM_EVENTS = {"behavior_check", "boot_counter_regression", "heartbeat_stale"}
 
 def _classify_severity(event: str) -> str:
     e = event.lower().replace("-", "_")
-    if any(k in e for k in ("debug", "tamper", "clone")):
+    if e in _CRITICAL_EVENTS or any(k in e for k in ("debug", "tamper", "clone")):
         return "critical"
-    if any(k in e for k in ("reject", "fail", "mismatch", "anomaly")):
+    if e in _HIGH_EVENTS or any(k in e for k in ("reject", "fail", "mismatch", "anomaly", "policy_fail")):
         return "high"
-    if any(k in e for k in ("behavior", "drift", "counter")):
+    if e in _MEDIUM_EVENTS or any(k in e for k in ("behavior", "drift", "counter", "heartbeat_stale", "stale")):
         return "medium"
     return "info"
 
@@ -66,15 +66,28 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
         data = request.json
         if not data:
             return jsonify({"error": "No data provided"}), 400
-            
+
         logs = data.get("logs", [])
+        if not isinstance(logs, list):
+            return jsonify({"error": "logs must be a list"}), 400
+
+        machine_id = data.get("machine_id")
         path = Path(audit_log_path)
-        
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        written = 0
         with path.open("a", encoding="utf-8") as f:
             for log in logs:
-                f.write(json.dumps(log) + "\n")
-                
-        return jsonify({"status": "ok", "count": len(logs)})
+                if not isinstance(log, dict):
+                    continue
+                if machine_id:
+                    pl = dict(log.get("payload") or {})
+                    pl.setdefault("_sync_machine", machine_id)
+                    log = {**log, "payload": pl}
+                f.write(json.dumps(log, sort_keys=False) + "\n")
+                written += 1
+
+        return jsonify({"status": "ok", "count": written})
 
     def _load_logs():
         path = Path(audit_log_path)

@@ -21,8 +21,48 @@ from certiguard.layers.storage import read_json, secure_write_json
 
 import base64
 
+HONEYPOT_KEYS = ("PREMIUM_UNLOCK", "ADMIN_OVERRIDE", "DEBUG_MODE", "FEATURE_FLAG_XYZ")
+_HONEYPOT_STRING_TRUTHY = frozenset(
+    {"true", "1", "yes", "on", "enable", "enabled", "y", "t"}
+)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def check_honeypot_tripwire(raw_license_bytes: bytes) -> None:
+    """
+    L7 — Inspect the **unsigned** JSON suffix (after the 64-byte Ed25519 signature).
+
+    Runs **before** ``verify_payload`` so obviously tampered unlock flags are rejected
+    even if an attacker experiments with the blob structure. Legitimate vendor licenses
+    **omit** these keys entirely, or set them explicitly to JSON ``false`` / ``0`` if
+    ever embedded as decoys.
+
+    Raises:
+        PermissionError: if a tripwire key carries an attacker-friendly value.
+    """
+    if len(raw_license_bytes) < 65:
+        return
+    try:
+        raw_payload = json.loads(raw_license_bytes[64:].decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
+    for key in HONEYPOT_KEYS:
+        if key not in raw_payload:
+            continue
+        v = raw_payload[key]
+        if isinstance(v, bool):
+            if v is True:
+                raise PermissionError(f"L7_HONEYPOT: {key} is true")
+            continue
+        if isinstance(v, (int, float)) and v != 0:
+            raise PermissionError(f"L7_HONEYPOT: {key} non-zero ({v!r})")
+        if isinstance(v, str) and v.strip().lower() in _HONEYPOT_STRING_TRUTHY:
+            raise PermissionError(f"L7_HONEYPOT: {key} string truthy ({v!r})")
+        if isinstance(v, (dict, list)) and v and key == "FEATURE_FLAG_XYZ":
+            raise PermissionError("L7_HONEYPOT: FEATURE_FLAG_XYZ non-empty collection")
 
 
 def verify_license_and_respond(
@@ -39,19 +79,8 @@ def verify_license_and_respond(
     raw_b64 = license_path.read_text(encoding="ascii")
     raw_bytes = base64.b64decode(raw_b64)
 
-    # --- LAYER 7: HONEYPOT TRIPWIRE (Second Line of Defense) ---
-    # We parse the JSON directly from the raw bytes (skipping the 64-byte signature prefix)
-    # This ensures that even if an attacker manages to bypass or forge the signature check below,
-    # the honeypot activation will be caught immediately.
-    try:
-        raw_payload_bytes = raw_bytes[64:]
-        raw_payload = json.loads(raw_payload_bytes.decode("utf-8"))
-        if raw_payload.get("PREMIUM_UNLOCK") or raw_payload.get("ADMIN_OVERRIDE") or \
-           raw_payload.get("DEBUG_MODE") or raw_payload.get("FEATURE_FLAG_XYZ"):
-            raise PermissionError("L7_HONEYPOT: Tampering detected via honeypot activation")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        pass
-    # -----------------------------------------------------------
+    # --- L7: honeypot tripwire on unsigned JSON suffix (before Ed25519 verify) ---
+    check_honeypot_tripwire(raw_bytes)
 
     # In production, replace PUBLIC_KEY_HEX with hardcoded hex string
     # For dynamic tests, we fall back to public_key_path
