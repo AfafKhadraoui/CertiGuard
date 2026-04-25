@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { dashboardApi } from "../../lib/apiBase";
 
 export function AuditLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -7,7 +8,7 @@ export function AuditLogsPage() {
 
   const fetchLogs = () => {
     setLoading(true);
-    fetch("http://localhost:8080/api/logs")
+    fetch(dashboardApi("/api/logs"))
       .then((res) => res.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);

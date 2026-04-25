@@ -1,14 +1,13 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { useState, useEffect } from "react";
-
-const API = "http://localhost:8080";
+import { dashboardApi } from "../../lib/apiBase";
 
 export function OverviewPage() {
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
     const load = () =>
-      fetch(`${API}/api/overview`)
+      fetch(dashboardApi("/api/overview"))
         .then((r) => r.json())
         .then(setData)
         .catch(console.error);

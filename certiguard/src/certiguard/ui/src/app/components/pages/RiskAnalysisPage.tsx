@@ -1,14 +1,13 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-
-const API = "http://localhost:8080";
+import { dashboardApi } from "../../lib/apiBase";
 
 export function RiskAnalysisPage() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/api/risk`)
+    fetch(dashboardApi("/api/risk"))
       .then((r) => r.json())
       .then((d) => { setData(d); setError(null); })
       .catch(() => setError("Could not connect to Dashboard API"));

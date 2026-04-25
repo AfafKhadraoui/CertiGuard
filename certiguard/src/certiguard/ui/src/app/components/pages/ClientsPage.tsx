@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router";
-
-const API = "http://localhost:8080";
+import { dashboardApi } from "../../lib/apiBase";
 
 export function ClientsPage() {
   const [clients, setClients] = useState<any[]>([]);
@@ -10,7 +9,7 @@ export function ClientsPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/api/clients`)
+    fetch(dashboardApi("/api/clients"))
       .then((r) => r.json())
       .then((data) => { setClients(data); setError(null); })
       .catch(() => setError("Could not connect to Dashboard API"))

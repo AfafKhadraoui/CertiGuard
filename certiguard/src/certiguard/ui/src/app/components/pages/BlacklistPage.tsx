@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API = "http://localhost:8080";
+import { dashboardApi } from "../../lib/apiBase";
 
 export function BlacklistPage() {
   const [blacklist, setBlacklist] = useState<any[]>([]);
@@ -9,7 +9,7 @@ export function BlacklistPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/api/blacklist`)
+    fetch(dashboardApi("/api/blacklist"))
       .then((r) => r.json())
       .then((data) => { setBlacklist(data); setError(null); })
       .catch(() => setError("Could not connect to Dashboard API"))
