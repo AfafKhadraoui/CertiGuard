@@ -2,6 +2,21 @@
 
 CertiGuard is a Python SDK prototype for protecting on-premise software licenses against tampering, cloning, replay, and over-usage abuse.
 
+**How to run everything (CLI, dashboard, React UI, E2E harness, tests):** see **[`docs/HOW_TO_TEST.md`](docs/HOW_TO_TEST.md)** — start at **“Run everything from zero”**. Demo narrative and sign-off script: **[`docs/DEMO_TEST_METHODOLOGY.md`](docs/DEMO_TEST_METHODOLOGY.md)**.
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `src/certiguard/` | Python SDK, CLI, Flask `dashboard.py`, packaged UI path `ui/dist` |
+| `src/certiguard/ui/` | Vite + React vendor console (`npm run build` → `dist/`) |
+| `tests/` | All pytest modules (layers, PoW heartbeat, watermark, honeypot, …) |
+| `examples/` | `cg_e2e_app/run_harness.py`, `demo_host_app.py`, `README.md` |
+| `scripts/` | Optional utilities (e.g. `smoke_dashboard.py`) |
+| `docs/` | `LAYERS.md`, `HOW_TO_TEST.md`, `DEMO_TEST_METHODOLOGY.md`, … |
+| `artifacts/noise_samples/` | Sample noise-generator outputs (optional reference) |
+| `demo_runs/` | **Ephemeral** local state (harness output); only `.gitkeep` is tracked |
+
 ## What this implementation includes
 
 - Layer 1: Ed25519 license signing and verification

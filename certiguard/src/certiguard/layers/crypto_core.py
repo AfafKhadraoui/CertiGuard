@@ -5,9 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidSignature
+import os
 
 
 def canonical_payload(payload: dict[str, Any]) -> bytes:
@@ -48,6 +51,11 @@ def sign_payload(payload: dict[str, Any], private_key: Ed25519PrivateKey) -> byt
     return sig + payload_bytes
 
 
+def sign_payload_bytes(payload_bytes: bytes, private_key: Ed25519PrivateKey) -> bytes:
+    sig = private_key.sign(payload_bytes)
+    return sig + payload_bytes
+
+
 def verify_payload(signed_bytes: bytes, public_key: Ed25519PublicKey) -> bytes:
     if len(signed_bytes) < 64:
         raise InvalidSignature("Payload too short to contain signature")
@@ -55,4 +63,45 @@ def verify_payload(signed_bytes: bytes, public_key: Ed25519PublicKey) -> bytes:
     payload_bytes = signed_bytes[64:]
     public_key.verify(sig, payload_bytes)
     return payload_bytes
+
+
+def derive_key_hkdf(salt: bytes, ikm: bytes, info: bytes, length: int = 32) -> bytes:
+    """
+    Derive a key using HKDF-SHA256.
+    Matches the logic used in ShieldWrap for cryptographic dependency.
+    """
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=salt,
+        info=info,
+    )
+    return hkdf.derive(ikm)
+
+
+def encrypt_binary(key: bytes, plaintext: bytes) -> bytes:
+    """
+    Encrypt binary data using AES-256-GCM.
+    Output format: nonce(12) || ciphertext(N) || tag(16)
+    """
+    aesgcm = AESGCM(key)
+    nonce = os.urandom(12)
+    # cryptography's AESGCM.encrypt returns ciphertext + tag
+    ct_with_tag = aesgcm.encrypt(nonce, plaintext, None)
+    return nonce + ct_with_tag
+
+
+def decrypt_binary(key: bytes, ciphertext_blob: bytes) -> bytes:
+    """
+    Decrypt binary data using AES-256-GCM.
+    Input format: nonce(12) || ciphertext(N) || tag(16)
+    """
+    if len(ciphertext_blob) < 28:
+        raise ValueError("Ciphertext blob too short")
+    
+    nonce = ciphertext_blob[:12]
+    ct_with_tag = ciphertext_blob[12:]
+    
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ct_with_tag, None)
 

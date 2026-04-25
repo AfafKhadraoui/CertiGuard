@@ -12,6 +12,8 @@ from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest
 from certiguard.layers.obfuscator import obfuscate_c_file, run_confuserex
+from certiguard.layers.protector import protect_executable
+from certiguard.dashboard import review_audit_logs
 from certiguard.watchdog_supervisor import supervise_heartbeat_or_fail
 
 
@@ -21,7 +23,7 @@ def _cmd_gen_keys(args: argparse.Namespace) -> None:
 
 
 def _cmd_gen_request(args: argparse.Namespace) -> None:
-    client = CertiGuardClient(Path(args.state_dir))
+    client = CertiGuardClient(Path(args.state_dir), collector_url=args.collector_url)
     req = client.bootstrap()
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -42,12 +44,64 @@ def _cmd_issue(args: argparse.Namespace) -> None:
         modules=args.modules.split(","),
         valid_days=args.valid_days,
         exe_hash=exe_hash,
+        k_app_b64=args.k_app_b64,
+        binary_secret_b64=args.binary_secret_b64,
     )
     print(f"License issued: {args.out}")
 
 
+def _cmd_protect(args: argparse.Namespace) -> None:
+    metadata = protect_executable(
+        exe_path=Path(args.exe),
+        out_dir=Path(args.out_dir)
+    )
+    print(f"Binary protected in: {args.out_dir}")
+    print(f"App Hash:      {metadata['app_hash']}")
+    print(f"K_app (B64):   {metadata['k_app_b64']}")
+    print(f"Secret (B64):  {metadata['binary_secret_b64']}")
+    print("\nIMPORTANT: Pass these to 'issue-license' to link them.")
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    client = CertiGuardClient(Path(args.state_dir), collector_url=args.collector_url)
+    run_kw = {
+        "package_dir": Path(args.package_dir),
+        "license_path": Path(args.license),
+        "public_key_path": Path(args.public_key),
+    }
+    if args.skip_layered_verify:
+        run_kw["skip_layered_verify"] = True
+    else:
+        run_kw["heartbeat_key"] = args.heartbeat_key
+        run_kw["behavior_features"] = [float(x) for x in args.features.split(",")]
+        run_kw["require_tpm_if_present"] = args.require_tpm_if_present
+        run_kw["app_binary_path"] = Path(args.app_binary) if args.app_binary else None
+        run_kw["policy_path"] = Path(args.policy_path) if args.policy_path else None
+        run_kw["use_machine_behavior_probe"] = args.machine_behavior_probe
+
+    exit_code = client.run_protected_app(**run_kw)
+    # Flush any queued audit lines when collector is configured (offline-first sync).
+    client.push_audit_logs_now()
+    exit(exit_code)
+
+
+def _cmd_dashboard(args: argparse.Namespace) -> None:
+    review_audit_logs(audit_log_path=args.audit_log, port=args.port)
+
+
+def _cmd_sync_audit(args: argparse.Namespace) -> None:
+    client = CertiGuardClient(Path(args.state_dir), collector_url=args.collector_url)
+    if not client.collector_configured():
+        raise SystemExit(
+            "Configure a collector: set CERTIGUARD_COLLECTOR_URL or pass --collector-url "
+            "(dashboard base URL, e.g. http://localhost:8080)"
+        )
+    ok = client.push_audit_logs_now()
+    print(json.dumps({"synced": ok}, indent=2))
+
+
 def _cmd_verify(args: argparse.Namespace) -> None:
-    client = CertiGuardClient(Path(args.state_dir))
+    client = CertiGuardClient(Path(args.state_dir), collector_url=args.collector_url)
     features = [float(x) for x in args.features.split(",")]
     result = client.verify_runtime(
         license_path=Path(args.license),
@@ -57,12 +111,13 @@ def _cmd_verify(args: argparse.Namespace) -> None:
         require_tpm_if_present=args.require_tpm_if_present,
         app_binary_path=Path(args.app_binary) if args.app_binary else None,
         policy_path=Path(args.policy_path) if args.policy_path else None,
+        use_machine_behavior_probe=args.machine_behavior_probe,
     )
     print(json.dumps(result.__dict__, indent=2))
 
 
 def _cmd_renewal(args: argparse.Namespace) -> None:
-    client = CertiGuardClient(Path(args.state_dir))
+    client = CertiGuardClient(Path(args.state_dir), collector_url=args.collector_url)
     key_path = Path(args.customer_private_key) if args.customer_private_key else None
     client.export_renewal_request(Path(args.out), customer_private_key_path=key_path)
     print(f"Renewal request exported: {args.out}")
@@ -93,6 +148,7 @@ def _cmd_init_policy(args: argparse.Namespace) -> None:
         exe_hash_grace_hours=args.exe_hash_grace_hours,
         baseline_learning_days=args.baseline_learning_days,
         anomaly_enforcement_after_learning=not args.disable_anomaly_enforcement,
+        use_machine_behavior_probe=args.machine_behavior_probe,
     )
     policy.save(Path(args.out))
     print(f"Policy file written: {args.out}")
@@ -142,6 +198,11 @@ def build_parser() -> argparse.ArgumentParser:
     gen_req = sub.add_parser("gen-request", help="Generate .cgreq request")
     gen_req.add_argument("--state-dir", required=True)
     gen_req.add_argument("--out", required=True)
+    gen_req.add_argument(
+        "--collector-url",
+        default=None,
+        help="Dashboard base URL for audit sync; overrides CERTIGUARD_COLLECTOR_URL for this process",
+    )
     gen_req.set_defaults(func=_cmd_gen_request)
 
     issue = sub.add_parser("issue-license", help="Issue signed license")
@@ -154,7 +215,73 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--valid-days", type=int, default=365)
     issue.add_argument("--app-binary")
     issue.add_argument("--exe-hash")
+    issue.add_argument("--k-app-b64", help="From 'protect' command")
+    issue.add_argument("--binary-secret-b64", help="From 'protect' command")
     issue.set_defaults(func=_cmd_issue)
+
+    protect = sub.add_parser("protect", help="Encrypt binary (ShieldWrap)")
+    protect.add_argument("--exe", required=True, help="Binary to encrypt")
+    protect.add_argument("--out-dir", required=True, help="Folder for app.enc + manifest.json")
+    protect.set_defaults(func=_cmd_protect)
+
+    run = sub.add_parser(
+        "run",
+        help="Run encrypted binary (ShieldWrap). By default runs full verify_runtime before decrypt (L5→L10→L4→L5→L2→L6); use --skip-layered-verify for crypto-only path.",
+    )
+    run.add_argument("--package-dir", required=True)
+    run.add_argument("--license", required=True)
+    run.add_argument("--public-key", required=True)
+    run.add_argument("--state-dir", required=True)
+    run.add_argument(
+        "--skip-layered-verify",
+        action="store_true",
+        help="Only Ed25519 + ShieldWrap unwrap (no anti-debug, challenge, heartbeat, anomaly). Not recommended.",
+    )
+    run.add_argument(
+        "--heartbeat-key",
+        default="dev-heartbeat",
+        help="Shared secret for PoW heartbeat (ignored if --skip-layered-verify)",
+    )
+    run.add_argument(
+        "--features",
+        default="20,10,3,30",
+        help="Comma-separated behavior_features for L6 (same as verify)",
+    )
+    run.add_argument(
+        "--require-tpm-if-present",
+        action="store_true",
+        help="Same as verify (ignored with --skip-layered-verify)",
+    )
+    run.add_argument("--app-binary", help="Optional app path for exe-hash policy during layered verify")
+    run.add_argument("--policy-path", help="Optional security policy JSON during layered verify")
+    run.add_argument(
+        "--machine-behavior-probe",
+        action="store_true",
+        help="L6: use machine probe (same as verify --machine-behavior-probe)",
+    )
+    run.add_argument(
+        "--collector-url",
+        default=None,
+        help="Dashboard base URL for audit sync; overrides CERTIGUARD_COLLECTOR_URL for this process",
+    )
+    run.set_defaults(func=_cmd_run)
+
+    dashboard = sub.add_parser("dashboard", help="Launch the vendor security dashboard")
+    dashboard.add_argument("--audit-log", required=True, help="Path to audit.log file")
+    dashboard.add_argument("--port", type=int, default=8080, help="Port to serve on")
+    dashboard.set_defaults(func=_cmd_dashboard)
+
+    sync_audit = sub.add_parser(
+        "sync-audit",
+        help="Push unsynced local audit.log lines to the dashboard (offline queue flush)",
+    )
+    sync_audit.add_argument("--state-dir", required=True)
+    sync_audit.add_argument(
+        "--collector-url",
+        default=None,
+        help="Dashboard base URL; overrides CERTIGUARD_COLLECTOR_URL",
+    )
+    sync_audit.set_defaults(func=_cmd_sync_audit)
 
     verify = sub.add_parser("verify", help="Run full verification")
     verify.add_argument("--state-dir", required=True)
@@ -173,12 +300,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--app-binary", help="Path to app binary for exe-hash integrity policy")
     verify.add_argument("--policy-path", help="Optional security policy JSON")
+    verify.add_argument(
+        "--machine-behavior-probe",
+        action="store_true",
+        help="L6: score psutil CPU/RAM/process + GPU heuristics (ignores --features vector)",
+    )
+    verify.add_argument(
+        "--collector-url",
+        default=None,
+        help="Dashboard base URL for audit sync; overrides CERTIGUARD_COLLECTOR_URL",
+    )
     verify.set_defaults(func=_cmd_verify)
 
     renewal = sub.add_parser("renewal-export", help="Export renewal request")
     renewal.add_argument("--state-dir", required=True)
     renewal.add_argument("--out", required=True)
     renewal.add_argument("--customer-private-key", help="Optional customer key to sign renewal export")
+    renewal.add_argument(
+        "--collector-url",
+        default=None,
+        help="Dashboard base URL for audit sync; overrides CERTIGUARD_COLLECTOR_URL",
+    )
     renewal.set_defaults(func=_cmd_renewal)
 
     noise = sub.add_parser("generate-noise", help="Generate per-build dynamic noise header/class")
@@ -207,6 +349,11 @@ def build_parser() -> argparse.ArgumentParser:
     policy.add_argument("--exe-hash-grace-hours", type=int, default=72)
     policy.add_argument("--baseline-learning-days", type=int, default=30)
     policy.add_argument("--disable-anomaly-enforcement", action="store_true")
+    policy.add_argument(
+        "--machine-behavior-probe",
+        action="store_true",
+        help="Persist use_machine_behavior_probe=true so L6 uses CPU/RAM/GPU snapshot",
+    )
     policy.set_defaults(func=_cmd_init_policy)
 
     watchdog = sub.add_parser("watchdog-supervise", help="Supervise verifier heartbeat health")
