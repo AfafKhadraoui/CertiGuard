@@ -71,6 +71,17 @@ class SyncManager:
                 timeout=10,
             )
             
+            if response.status_code == 403:
+                rdata = response.json()
+                if rdata.get("action") == "REVOKE_IMMEDIATE":
+                    print("\n[!!!] SECURITY ALERT: This installation has been REMOTELY REVOKED.")
+                    print("[!!!] Deleting local security tokens and locking application...")
+                    for f in ["dna.json", "counter.json", "policy.json"]:
+                        p = self.state_dir / f
+                        if p.exists(): p.unlink()
+                    import sys
+                    sys.exit(66) # Exit with unique security code
+
             if response.status_code == 200:
                 self._save_last_synced_line(len(lines))
                 return True

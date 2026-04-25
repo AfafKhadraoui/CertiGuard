@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass
 class SecurityPolicy:
     require_tpm_if_present: bool = False
+    allow_vm: bool = True
     exe_hash_grace_hours: int = 72
     baseline_learning_days: int = 30
     anomaly_enforcement_after_learning: bool = True

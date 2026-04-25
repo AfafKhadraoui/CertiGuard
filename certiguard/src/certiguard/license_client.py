@@ -13,10 +13,11 @@ from certiguard.config import SecurityPolicy
 from certiguard.layers.anomaly import BehaviorDetector
 from certiguard.layers.behavior_probe import probe_host_behavior, probe_to_feature_vector
 from certiguard.layers.antidebug import debugger_detected
+from certiguard.layers.antivm import is_virtual_machine
 from certiguard.layers.audit import append_event, verify_chain
 from certiguard.layers.counter import ensure_boot_counter, init_counter
 from certiguard.layers.dna import capture_runtime_snapshot, init_installation_dna, load_installation_dna
-from certiguard.layers.hardware import hardware_fingerprint
+from certiguard.layers.hardware import generate_hardware_fingerprint
 from certiguard.layers.tpm import tpm_anchor, tpm_info
 from certiguard.layers.verifier_ipc import verify_via_separate_process
 from certiguard.layers.verifier_server import random_challenge, verify_challenge_response
@@ -65,7 +66,7 @@ class CertiGuardClient:
             pass
 
     def bootstrap(self) -> dict:
-        hw_fp = hardware_fingerprint()
+        hw_fp = generate_hardware_fingerprint()
         init_installation_dna(self.dna_path, hw_fp)
         init_counter(self.counter_path, hw_fp)
         runtime = capture_runtime_snapshot()
@@ -99,13 +100,17 @@ class CertiGuardClient:
                 append_event(self.audit_path, "debug_detected", {})
                 return VerificationResult(False, "L5_DEBUG", "Debugger detected", {})
 
+            if not policy.allow_vm and is_virtual_machine():
+                append_event(self.audit_path, "vm_detected", {})
+                return VerificationResult(False, "L5_VM", "Virtual Machine environment blocked by policy", {})
+
             if not verify_chain(self.audit_path):
                 return VerificationResult(False, "AUDIT_TAMPER", "Audit chain invalid", {})
 
             challenge = random_challenge()
             try:
                 runtime = capture_runtime_snapshot()
-                ensure_boot_counter(self.counter_path, hardware_fingerprint(), runtime["boot_id"])
+                ensure_boot_counter(self.counter_path, generate_hardware_fingerprint(), runtime["boot_id"])
                 response = verify_via_separate_process(
                     state_dir=self.state_dir,
                     license_path=license_path,
@@ -185,20 +190,18 @@ class CertiGuardClient:
                     "explanation": probe_snapshot.get("explanation", "")[:2000],
                 }
             append_event(self.audit_path, "behavior_check", behavior_payload)
-            if policy.anomaly_enforcement_after_learning and baseline.get("learning_complete", False) and (is_anomaly or drift):
-                return VerificationResult(
-                    False,
-                    "L6_ANOMALY",
-                    "Behavior anomaly detected after learning period",
-                    {"score": score, "drift_score": drift_score, "feature_source": feature_source},
-                )
+            
+            # PASSIVE MONITORING: We log the anomaly but return OK=True.
+            # This ensures legitimate users aren't blocked by performance spikes.
+            # The Vendor can see the 'is_anomaly' flag in the Dashboard.
             return VerificationResult(
                 True,
-                "OK",
-                "License accepted",
+                "OK_WITH_ANOMALY" if (is_anomaly or drift) else "OK",
+                "License accepted (Behavioral Warning logged)" if (is_anomaly or drift) else "License accepted",
                 {
                     "anomaly": is_anomaly,
                     "score": score,
+                    "drift": drift,
                     "license_id": response["license_id"],
                     "feature_source": feature_source,
                 },
@@ -295,7 +298,7 @@ class CertiGuardClient:
         binary_secret = base64.b64decode(shieldwrap["binary_secret_b64"])
         
         # Build IKM using LOCAL hardware fingerprint + LOCAL TPM anchor (if license is bound)
-        local_hwid = hardware_fingerprint()
+        local_hwid = generate_hardware_fingerprint()
         ikm_str = f"{local_hwid}|{lic['valid_until']}"
         
         # If the license expects a TPM anchor, we MUST provide our local one for the math to work.

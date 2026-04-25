@@ -30,6 +30,13 @@ export function OverviewPage() {
 
       <div className="grid grid-cols-4 gap-4">
         <div className="rounded border border-white/5 bg-[#0d1117] p-5">
+          <div className="mb-1 text-sm text-gray-400">Security Health Score</div>
+          <div className={`text-3xl font-semibold ${stats.risk_score > 70 ? "text-red-400" : stats.risk_score > 30 ? "text-orange-400" : "text-emerald-400"}`}>
+            {100 - stats.risk_score}%
+          </div>
+          <div className="mt-2 text-xs text-gray-400">Aggregated risk assessment</div>
+        </div>
+        <div className="rounded border border-white/5 bg-[#0d1117] p-5">
           <div className="mb-1 text-sm text-gray-400">Total Events</div>
           <div className="text-3xl font-semibold">{stats.total_events.toLocaleString()}</div>
           <div className="mt-2 text-xs text-gray-400">All-time from audit log</div>
@@ -40,14 +47,9 @@ export function OverviewPage() {
           <div className="mt-2 text-xs text-red-400">High-severity events</div>
         </div>
         <div className="rounded border border-white/5 bg-[#0d1117] p-5">
-          <div className="mb-1 text-sm text-gray-400">High Risk</div>
-          <div className="text-3xl font-semibold text-orange-400">{stats.suspicious}</div>
-          <div className="mt-2 text-xs text-orange-400">Requires attention</div>
-        </div>
-        <div className="rounded border border-white/5 bg-[#0d1117] p-5">
-          <div className="mb-1 text-sm text-gray-400">Normal</div>
-          <div className="text-3xl font-semibold text-emerald-400">{stats.safe}</div>
-          <div className="mt-2 text-xs text-emerald-400">Routine events</div>
+          <div className="mb-1 text-sm text-gray-400">AI Anomalies</div>
+          <div className="text-3xl font-semibold text-orange-400">{data?.stats?.risk_score > 0 ? "Alert" : "Clean"}</div>
+          <div className="mt-2 text-xs text-orange-400">Behavioral drift analysis</div>
         </div>
       </div>
 

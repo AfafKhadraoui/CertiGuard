@@ -13,7 +13,7 @@ from cryptography.exceptions import InvalidSignature
 from certiguard.layers.counter import read_counter
 from certiguard.layers.crypto_core import load_public_key, verify_payload
 from certiguard.layers.dna import derive_session_key, load_installation_dna, validate_and_update_timeline
-from certiguard.layers.hardware import hardware_fingerprint
+from certiguard.layers.hardware import generate_hardware_fingerprint
 from certiguard.layers.tpm import tpm_anchor
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.storage import read_json, secure_write_json
@@ -100,7 +100,7 @@ def verify_license_and_respond(
     if datetime.fromisoformat(payload["issued_at"].replace("Z", "+00:00")) > _now():
         raise PermissionError("License from the future")
 
-    hw_fp = hardware_fingerprint()
+    hw_fp = generate_hardware_fingerprint()
     if not hmac.compare_digest(payload["hardware_fingerprint"], hw_fp):
         raise PermissionError("Hardware fingerprint mismatch")
 
@@ -155,7 +155,7 @@ def verify_challenge_response(
     raw_bytes = base64.b64decode(raw_b64)
     payload_bytes = raw_bytes[64:]
     payload = json.loads(payload_bytes.decode("utf-8"))
-    hw_fp = hardware_fingerprint()
+    hw_fp = generate_hardware_fingerprint()
     boot_count = read_counter(counter_path, hw_fp)
     session_key = derive_session_key(dna_path, hw_fp, boot_count)
     license_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).digest()

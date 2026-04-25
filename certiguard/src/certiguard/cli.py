@@ -12,6 +12,7 @@ from certiguard.layers.crypto_core import generate_keypair
 from certiguard.layers.integrity import file_sha256
 from certiguard.layers.manifest import create_signed_manifest, verify_signed_manifest
 from certiguard.layers.obfuscator import obfuscate_c_file, run_confuserex
+from certiguard.layers.vm_generator import generate_vm_layer
 from certiguard.layers.protector import protect_executable
 from certiguard.dashboard import review_audit_logs
 from certiguard.watchdog_supervisor import supervise_heartbeat_or_fail
@@ -166,13 +167,19 @@ def _cmd_watchdog_supervise(args: argparse.Namespace) -> None:
 
 
 def _cmd_obfuscate_source(args: argparse.Namespace) -> None:
-    out = obfuscate_c_file(
-        input_path=Path(args.input),
-        output_path=Path(args.out),
+    input_path = Path(args.input)
+    output_path = Path(args.out)
+    source = input_path.read_text(encoding="utf-8")
+    
+    obfuscated = obfuscate_c_file(
+        source=source,
         seed=args.seed,
         intensity=args.intensity,
     )
-    print(f"Obfuscated source written: {out} [Intensity: {args.intensity}]")
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(obfuscated, encoding="utf-8")
+    print(f"Obfuscated source written: {output_path} [Intensity: {args.intensity}]")
 
 
 def _cmd_confuserex_protect(args: argparse.Namespace) -> None:
@@ -184,6 +191,14 @@ def _cmd_confuserex_protect(args: argparse.Namespace) -> None:
     )
     if not ok:
         raise SystemExit(1)
+
+
+def _cmd_generate_vm(args: argparse.Namespace) -> None:
+    mapping = generate_vm_layer(
+        out_header=Path(args.out),
+        seed=args.seed,
+    )
+    print(f"[*] Polymorphic VM Header generated: {args.out} [Seed: {args.seed}]")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -377,6 +392,11 @@ def build_parser() -> argparse.ArgumentParser:
     confuserex.add_argument("--out", required=True, help="Output directory for protected assembly")
     confuserex.add_argument("--confuserex", help="Path to Confuser.CLI.exe (auto-detected if in PATH)")
     confuserex.set_defaults(func=_cmd_confuserex_protect)
+
+    vm = sub.add_parser("generate-vm", help="Generate a polymorphic VM protection layer (C header)")
+    vm.add_argument("--out", required=True, help="Output .h header file")
+    vm.add_argument("--seed", type=int, default=42, help="Random seed for ISA generation")
+    vm.set_defaults(func=_cmd_generate_vm)
 
     return parser
 

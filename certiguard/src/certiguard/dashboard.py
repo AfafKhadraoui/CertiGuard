@@ -9,9 +9,11 @@ from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 
 _CRITICAL_EVENTS = {"debug_detected", "audit_tamper", "challenge_fail"}
-_HIGH_EVENTS = {"license_reject", "license_fail", "tpm_mismatch", "behavior_anomaly", "tpm_policy_fail"}
+_HIGH_EVENTS = {"license_reject", "license_fail", "tpm_mismatch", "behavior_anomaly", "tpm_policy_fail", "vm_detected"}
 _MEDIUM_EVENTS = {"behavior_check", "boot_counter_regression", "heartbeat_stale"}
-
+# Centralized revocation list (in production, this would be a database)
+REVOCATION_LIST = set()
+BLACKLISTED_HARDWARE = set()
 def _classify_severity(event: str) -> str:
     e = event.lower().replace("-", "_")
     if e in _CRITICAL_EVENTS or any(k in e for k in ("debug", "tamper", "clone")):
@@ -67,6 +69,11 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
+        # Remote Kill Switch: Check if the device is revoked
+        hw_id = data.get("machine_id")
+        if hw_id in BLACKLISTED_HARDWARE:
+            return jsonify({"status": "error", "action": "REVOKE_IMMEDIATE"}), 403
+
         logs = data.get("logs", [])
         if not isinstance(logs, list):
             return jsonify({"error": "logs must be a list"}), 400
@@ -102,6 +109,14 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
                 continue
         return result
 
+    @app.route("/api/admin/revoke", methods=["POST"])
+    def revoke_access():
+        data = request.json
+        target_id = data.get("id")
+        # In this demo, we use hardware revocation
+        BLACKLISTED_HARDWARE.add(target_id)
+        return jsonify({"ok": True, "message": f"Revoked hardware {target_id}"})
+
     @app.route("/api/overview")
     def get_overview():
         logs = _load_logs()
@@ -133,6 +148,15 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
         total = len(logs)
         blacklisted = counts.get("critical", 0)
         suspicious = counts.get("high", 0)
+        
+        # Calculate Risk Score (0-100)
+        # Weighting: Critical=40, High=15, Anomaly=5
+        risk = (blacklisted * 40) + (suspicious * 15)
+        # Add 5 per behavior_check that was actually an anomaly
+        anomalies = sum(1 for l in logs if l.get("event") == "behavior_check" and l.get("payload", {}).get("anomaly"))
+        risk += (anomalies * 5)
+        risk_score = min(100, risk)
+
         safe = max(0, total - blacklisted - suspicious)
         return jsonify({
             "stats": {
@@ -140,6 +164,7 @@ def review_audit_logs(audit_log_path: str, port: int = 8080) -> None:
                 "blacklisted": blacklisted,
                 "suspicious": suspicious,
                 "safe": safe,
+                "risk_score": risk_score
             },
             "activity_by_hour": [{"time": k, "activity": v} for k, v in sorted(by_hour.items())],
             "threat_by_day": [{"date": k, "count": v} for k, v in sorted(by_day.items())],

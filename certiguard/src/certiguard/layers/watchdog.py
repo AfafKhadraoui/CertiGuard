@@ -19,7 +19,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from certiguard.layers.hardware import hardware_fingerprint
+from certiguard.layers.hardware import generate_hardware_fingerprint
 
 # Partial-hash difficulty (hex prefix). Increase to harden; decreases mining speed.
 _POW_PREFIX = "00000"
@@ -49,7 +49,7 @@ def mine_pow(ts: str, machine_id: str, prev_hash: str, heartbeat_key: str = "") 
 
 def write_heartbeat(path: Path, key: str) -> None:
     now = datetime.now(UTC).isoformat()
-    machine_id = hardware_fingerprint()
+    machine_id = generate_hardware_fingerprint()
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +86,7 @@ def verify_heartbeat_recent(path: Path, key: str, timeout_seconds: int = 60) -> 
         if not lines:
             return False
             
-        machine_id = hardware_fingerprint()
+        machine_id = generate_hardware_fingerprint()
         prev_hash = "0" * 64
         
         for line in lines:
